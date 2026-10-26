@@ -1624,9 +1624,17 @@ int osal_fallocate(mdbx_filehandle_t fd, uint64_t length) {
 #elif defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200112L && !defined(__APPLE__)
   err = posix_fallocate(fd, 0, length) ? ignore_enosys_and_eremote(errno) : MDBX_SUCCESS;
 #elif defined(__APPLE__)
-  fstore_t store = {F_ALLOCATEALL, F_PEOFPOSMODE, 0, length, 0};
-  if (fcntl(fd, F_PREALLOCATE, &store))
-    err = ignore_enosys_and_eremote(errno);
+  /* F_PEOFPOSMODE allocates fst_length bytes past the physical end of file,
+   * so only the part not allocated yet is requested. */
+  struct stat info;
+  if (fstat(fd, &info))
+    return errno;
+  const uint64_t allocated = UINT64_C(512) * info.st_blocks;
+  if (length > allocated) {
+    fstore_t store = {F_ALLOCATEALL, F_PEOFPOSMODE, 0, (off_t)(length - allocated), 0};
+    if (fcntl(fd, F_PREALLOCATE, &store))
+      err = ignore_enosys_and_eremote(errno);
+  }
 #endif /* Apple */
 #if !defined(_WIN32) && !defined(_WIN64)
   /* Workaround for testing: ignore ENOSPC for TMPFS/RAMFS.
